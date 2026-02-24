@@ -1,43 +1,6 @@
 import pytest
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-from sqlalchemy.pool import StaticPool
 
-from factories import user_factory
-from fastapi_app.main import app, Base, get_db
-
-
-# ---------- Test DB ----------
-
-SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
-
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-
-Base.metadata.create_all(bind=engine)
-
-
-@pytest.fixture(scope="function")
-async def async_client():
-    connection = engine.connect()
-    connection.exec_driver_sql("BEGIN")  # real BEGIN at DBAPI level (required for SQLite savepoint rollback)
-    session = Session(bind=connection, join_transaction_mode="create_savepoint")
-
-    def override_get_db():
-        yield session
-
-    app.dependency_overrides[get_db] = override_get_db
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        yield client
-
-    session.close()
-    connection.exec_driver_sql("ROLLBACK")
-    connection.close()
+from tests.factories import user_factory
 
 
 # ---------- POST /users: valid payloads ----------
