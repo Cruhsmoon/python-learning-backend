@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String
@@ -10,7 +12,19 @@ SessionLocal = sessionmaker(bind=engine)
 
 Base = declarative_base()
 
-app = FastAPI()
+
+# -------------------- Lifespan --------------------
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Runs once at application startup.
+    # Reads the module-level `engine` at call time, so tests can patch it
+    # to SQLite before the first client is created.
+    Base.metadata.create_all(bind=engine)
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 # -------------------- DB Model --------------------
@@ -21,9 +35,6 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String)
     email = Column(String)
-
-
-Base.metadata.create_all(bind=engine)
 
 
 # -------------------- Pydantic Schema --------------------

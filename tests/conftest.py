@@ -1,14 +1,16 @@
 import pytest
 import pytest_html
+from fastapi.testclient import TestClient
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
+import fastapi_app.main as _app_module
 from fastapi_app.main import app, Base, get_db
 
 
-# ---------- Session-scoped engine: created once, tables created once ----------
+# ---------- Session-scoped SQLite engine ----------
 
 @pytest.fixture(scope="session")
 def test_engine():
@@ -20,6 +22,24 @@ def test_engine():
     Base.metadata.create_all(bind=engine)
     yield engine
     Base.metadata.drop_all(bind=engine)
+
+
+# ---------- Swap production engine for SQLite across the whole session ----------
+#
+# Why autouse + session scope?
+# fastapi_app/main.py calls Base.metadata.create_all(bind=engine) inside the
+# lifespan handler.  That handler runs every time an ASGI client starts
+# (AsyncClient via ASGITransport, or TestClient as context manager).
+# By patching the module-level `engine` attribute once at session start we
+# ensure every lifespan invocation uses SQLite instead of PostgreSQL, so tests
+# work without a running database server.
+
+@pytest.fixture(scope="session", autouse=True)
+def patch_production_engine(test_engine):
+    original = _app_module.engine
+    _app_module.engine = test_engine
+    yield
+    _app_module.engine = original
 
 
 # ---------- DB snapshot helper for HTML report ----------
@@ -39,12 +59,16 @@ def db_rows_as_html(session: Session) -> str:
     )
 
 
-# ---------- Function-scoped async client with transaction rollback ----------
+# ---------- Async client — per-test transaction rollback ----------
+#
+# Uses a real DBAPI-level BEGIN so that SQLite savepoints work correctly.
+# The savepoint lets each request's commit land inside the transaction;
+# the outer ROLLBACK at teardown erases everything, keeping tests isolated.
 
 @pytest.fixture(scope="function")
 async def async_client(request, test_engine):
     connection = test_engine.connect()
-    connection.exec_driver_sql("BEGIN")  # real BEGIN at DBAPI level (required for SQLite savepoint rollback)
+    connection.exec_driver_sql("BEGIN")
     session = Session(bind=connection, join_transaction_mode="create_savepoint")
 
     def override_get_db():
@@ -55,12 +79,46 @@ async def async_client(request, test_engine):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
 
-    # Capture DB state before rollback — picked up by pytest_runtest_makereport below
     request.node._db_snapshot_html = db_rows_as_html(session)
 
     session.close()
     connection.exec_driver_sql("ROLLBACK")
     connection.close()
+    app.dependency_overrides.pop(get_db, None)
+
+
+# ---------- Sync client — per-test transaction rollback ----------
+#
+# Same isolation strategy as async_client but using Starlette's synchronous
+# TestClient.  TestClient runs the ASGI lifespan when used as a context
+# manager; because patch_production_engine has already replaced the module
+# engine with SQLite, the lifespan create_all() is a no-op (tables exist).
+
+@pytest.fixture(scope="function")
+def sync_client(test_engine):
+    connection = test_engine.connect()
+    connection.exec_driver_sql("BEGIN")
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
+
+    def override_get_db():
+        yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    # Do NOT use TestClient as a context manager here.
+    # The context manager runs the ASGI lifespan, which calls
+    # Base.metadata.create_all(bind=engine).  With StaticPool there is only
+    # one DBAPI connection; create_all acquires it and issues an internal
+    # COMMIT, which silently ends our outer BEGIN transaction and makes the
+    # teardown ROLLBACK fail.  Tables are already created by the session-scoped
+    # test_engine fixture, so skipping the lifespan is safe.
+    client = TestClient(app, raise_server_exceptions=True)
+    yield client
+
+    session.close()
+    connection.exec_driver_sql("ROLLBACK")
+    connection.close()
+    app.dependency_overrides.pop(get_db, None)
 
 
 # ---------- HTML report: attach DB snapshot to each test ----------
