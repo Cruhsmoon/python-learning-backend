@@ -1,3 +1,5 @@
+![CI](https://github.com/Crushmoon/python-learning-backend/actions/workflows/test.yml/badge.svg)
+
 # Python Learning Backend
 
 This repository contains exercises and backend experiments:
@@ -12,4 +14,5 @@ This repository contains exercises and backend experiments:
 ## How to run
 
 ```bash
-python report.py
+python exercises/report.py
+```
