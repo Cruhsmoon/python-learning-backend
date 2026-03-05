@@ -5,16 +5,16 @@ import httpx
 
 @pytest.fixture(scope="session")
 def base_url():
-    return os.getenv("BASE_URL", "").rstrip("/")
+    url = os.getenv("BASE_URL")
+    if not url:
+        raise RuntimeError("BASE_URL not defined in environment")
+    return url.rstrip("/")
 
 
 @pytest.fixture
-async def client(base_url, async_client):
-    if base_url:
-        async with httpx.AsyncClient(base_url=base_url) as c:
-            yield c
-    else:
-        yield async_client
+async def client(base_url):
+    async with httpx.AsyncClient(base_url=base_url) as c:
+        yield c
 
 
 @pytest.fixture
