@@ -83,7 +83,7 @@ async def test_malformed_token_returns_401(async_client):
 async def test_wrong_signature_returns_401(async_client):
     token = _make_token(
         {"sub": "testuser", "role": "user"},
-        secret="completely-wrong-secret",
+        secret="wrong-secret-key-padded-to-meet-hs256-minimum",  # ≥ 32 bytes
     )
     headers = {"Authorization": f"Bearer {token}"}
     response = await async_client.get("/users/me", headers=headers)
@@ -95,6 +95,7 @@ async def test_wrong_signature_returns_401(async_client):
 async def test_wrong_algorithm_returns_401(async_client):
     token = _make_token(
         {"sub": "testuser", "role": "user"},
+        secret="wrong-algorithm-key-padded-to-meet-hs512-minimum-length-requirement",  # ≥ 64 bytes
         algorithm="HS512",
     )
     headers = {"Authorization": f"Bearer {token}"}
