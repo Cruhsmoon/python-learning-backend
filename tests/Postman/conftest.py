@@ -5,16 +5,21 @@ import httpx
 
 @pytest.fixture(scope="session")
 def base_url():
-    url = os.getenv("BASE_URL")
-    if not url:
-        raise RuntimeError("BASE_URL not defined in environment")
-    return url.rstrip("/")
+    return os.getenv("BASE_URL", "").rstrip("/")
 
 
 @pytest.fixture
-async def client(base_url):
-    async with httpx.AsyncClient(base_url=base_url) as c:
-        yield c
+async def client(base_url, async_client):
+    """
+    When BASE_URL is set (via --envfile or environment), send requests to the
+    live server at that URL.  Otherwise fall back to the in-process ASGI client
+    so postman tests pass in the full suite without a running server.
+    """
+    if base_url:
+        async with httpx.AsyncClient(base_url=base_url) as c:
+            yield c
+    else:
+        yield async_client
 
 
 @pytest.fixture
