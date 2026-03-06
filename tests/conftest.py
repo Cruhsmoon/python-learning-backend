@@ -121,6 +121,48 @@ def sync_client(test_engine):
     app.dependency_overrides.pop(get_db, None)
 
 
+# ---------- Celery fixtures ----------
+#
+# task_always_eager=True  — tasks execute synchronously in the same process.
+# task_eager_propagates=True — exceptions raised inside tasks propagate to the
+#   caller instead of being swallowed into the result object.
+# memory:// broker + cache+memory:// backend — no real Redis or RabbitMQ needed.
+
+@pytest.fixture(scope="function")
+def celery_app():
+    """
+    Celery app configured for synchronous eager execution.
+    Changes are applied before each test and reverted after.
+    """
+    import workers.celery_app as _celery
+
+    original = {
+        "task_always_eager": _celery.app.conf.task_always_eager,
+        "task_eager_propagates": _celery.app.conf.task_eager_propagates,
+        "broker_url": _celery.app.conf.broker_url,
+        "result_backend": _celery.app.conf.result_backend,
+    }
+
+    _celery.app.conf.update(
+        task_always_eager=True,
+        task_eager_propagates=True,
+        broker_url="memory://",
+        result_backend="cache+memory://",
+    )
+
+    yield _celery.app
+
+    _celery.app.conf.update(original)
+
+
+@pytest.fixture(scope="function")
+def fake_redis():
+    """In-memory Redis substitute — no real Redis server required."""
+    import fakeredis
+    server = fakeredis.FakeServer()
+    return fakeredis.FakeRedis(server=server, decode_responses=False)
+
+
 # ---------- PostgreSQL fixtures ----------
 #
 # PG_DATABASE_URL points at the same database the app uses.  Every fixture here
