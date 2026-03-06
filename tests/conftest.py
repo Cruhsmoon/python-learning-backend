@@ -121,6 +121,101 @@ def sync_client(test_engine):
     app.dependency_overrides.pop(get_db, None)
 
 
+# ---------- PostgreSQL fixtures ----------
+#
+# PG_DATABASE_URL points at the same database the app uses.  Every fixture here
+# wraps its work in a raw DBAPI-level BEGIN that is rolled back on teardown, so
+# no test data ever persists in PostgreSQL.
+
+PG_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/postgres"
+
+
+@pytest.fixture(scope="function")
+def db_session():
+    """
+    SQLAlchemy Session connected to real PostgreSQL.
+
+    Lifecycle:
+      1. Create a new engine and connection.
+      2. Start a DBAPI-level transaction (BEGIN).
+      3. Bind a Session to that connection.
+      4. Yield the session — tests use flush(), not commit().
+      5. Roll back on teardown — no data persists between tests.
+    """
+    from sqlalchemy import create_engine
+    engine = create_engine(PG_DATABASE_URL)
+    connection = engine.connect()
+    connection.exec_driver_sql("BEGIN")
+    session = Session(bind=connection)
+
+    yield session
+
+    session.close()
+    connection.exec_driver_sql("ROLLBACK")
+    connection.close()
+    engine.dispose()
+
+
+@pytest.fixture(scope="function")
+async def pg_async_client():
+    """
+    AsyncClient that drives the FastAPI app against real PostgreSQL.
+
+    The session-scoped patch_production_engine autouse fixture has already
+    replaced _app_module.engine with SQLite.  This fixture temporarily
+    restores the real PostgreSQL engine for the duration of one test, then
+    puts the SQLite engine back so other tests are unaffected.
+
+    Yields (client, session) so the caller can both make HTTP requests and
+    query the database directly to verify persistence.
+    """
+    from sqlalchemy import create_engine
+    pg_engine = create_engine(PG_DATABASE_URL)
+    connection = pg_engine.connect()
+    connection.exec_driver_sql("BEGIN")
+    # create_savepoint mode lets route-level db.commit() land inside the outer
+    # transaction instead of committing to the database for real.
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
+
+    # Temporarily override the SQLite patch with the real PostgreSQL engine.
+    saved_engine = _app_module.engine
+    _app_module.engine = pg_engine
+
+    def override_get_db():
+        yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        yield client, session
+
+    app.dependency_overrides.pop(get_db, None)
+    session.close()
+    connection.exec_driver_sql("ROLLBACK")
+    connection.close()
+    pg_engine.dispose()
+    _app_module.engine = saved_engine  # restore SQLite patch for remaining tests
+
+
+# ---------- Auth fixtures ----------
+
+@pytest.fixture
+async def auth_token(async_client):
+    """Logs in as testuser and returns the JWT access_token string."""
+    response = await async_client.post(
+        "/auth/login",
+        json={"username": "testuser", "password": "testpass"},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["access_token"]
+
+
+@pytest.fixture
+def auth_headers(auth_token):
+    """Returns an Authorization header dict ready to pass to httpx."""
+    return {"Authorization": f"Bearer {auth_token}"}
+
+
 # ---------- HTML report: attach DB snapshot to each test ----------
 
 @pytest.hookimpl(hookwrapper=True)
