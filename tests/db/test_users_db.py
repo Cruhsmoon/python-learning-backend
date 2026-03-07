@@ -77,6 +77,7 @@ def test_cascade_delete(db_session):
     is rolled back together with the data when the fixture tears down.
     """
     # Create a child table inside the transaction — rolled back on teardown.
+    db_session.execute(text("DROP TABLE IF EXISTS test_user_posts"))
     db_session.execute(text("""
         CREATE TABLE test_user_posts (
             id      SERIAL PRIMARY KEY,

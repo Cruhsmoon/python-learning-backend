@@ -42,5 +42,5 @@ jobs:
       - name: Run tests with coverage
         run: |
           pytest --cov=fastapi_app --cov-branch --cov-fail-under=80 \
-            --ignore=tests/postman \
+            --ignore=tests/Postman \
             --ignore=tests/api/test_openapi.py

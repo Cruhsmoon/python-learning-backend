@@ -172,8 +172,23 @@ def fake_redis():
 PG_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/postgres"
 
 
+@pytest.fixture(scope="session")
+def pg_schema():
+    """Creates the app schema in real PostgreSQL once per test session.
+
+    Needed because patch_production_engine (autouse, session-scoped) redirects
+    Base.metadata.create_all() to the SQLite test engine, so PostgreSQL never
+    gets its tables created automatically.  This fixture fills that gap.
+    """
+    from sqlalchemy import create_engine as _create_engine
+    engine = _create_engine(PG_DATABASE_URL)
+    Base.metadata.create_all(bind=engine)
+    engine.dispose()
+    yield
+
+
 @pytest.fixture(scope="function")
-def db_session():
+def db_session(pg_schema):
     """
     SQLAlchemy Session connected to real PostgreSQL.
 
@@ -199,7 +214,7 @@ def db_session():
 
 
 @pytest.fixture(scope="function")
-async def pg_async_client():
+async def pg_async_client(pg_schema):
     """
     AsyncClient that drives the FastAPI app against real PostgreSQL.
 
