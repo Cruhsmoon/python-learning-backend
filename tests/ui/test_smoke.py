@@ -41,14 +41,21 @@ def test_main_navigation_is_visible(page, base_url: str) -> None:
 
 @pytest.mark.ui
 def test_navigation_contains_key_destinations(page, base_url: str) -> None:
-    """Core site sections (Events, Insights) must appear as nav links."""
+    """
+    Links to core site sections (Events, Insights) must be present on the
+    homepage.
+
+    Greenbook renders its primary navigation as plain <a> tags outside any
+    <nav> element, so we assert by href rather than by nav-container text.
+    """
     home = HomePage(page, base_url)
     home.navigate()
 
-    texts = [t.strip().lower() for t in home.nav_link_texts() if t.strip()]
-    expected = {"events", "insights"}
-
-    missing = [label for label in expected if not any(label in t for t in texts)]
+    expected_hrefs = ["/events", "/insights"]
+    missing = [
+        href for href in expected_hrefs
+        if page.locator(f"a[href='{href}']").count() == 0
+    ]
     assert not missing, (
-        f"Nav links not found: {missing}. Visible nav texts: {texts}"
+        f"Homepage is missing links to: {missing}"
     )

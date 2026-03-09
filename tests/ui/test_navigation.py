@@ -9,7 +9,10 @@ Scenarios:
   3. URL changes after clicking any nav link (content changed).
 """
 
+import re
+
 import pytest
+from playwright.sync_api import expect
 
 from tests.ui.pages.home_page import HomePage
 
@@ -36,15 +39,25 @@ def test_nav_link_updates_url(page, base_url: str, href: str, expected_fragment:
 
 @pytest.mark.ui
 def test_events_page_title_reflects_section(page, base_url: str) -> None:
-    """After navigating to /events the page title should include 'Events'."""
+    """
+    After navigating to /events the URL and document title must confirm
+    the events section loaded.
+
+    Next.js updates <title> asynchronously after a client-side route change.
+    Reading page.title() immediately after navigation may return the previous
+    page's title.  We use Playwright's expect().to_have_title() which retries
+    internally until the title matches or the timeout expires.
+    """
     home = HomePage(page, base_url)
     home.navigate()
     home.click_nav_link("/events")
 
-    title = page.title()
-    assert "event" in title.lower(), (
-        f"Expected 'events' in page title after navigation to /events; got: {title!r}"
+    assert "events" in page.url.lower(), (
+        f"Expected URL to contain 'events' after navigation; got: {page.url!r}"
     )
+
+    # Retry-able assertion — waits up to 10 s for the title to update.
+    expect(page).to_have_title(re.compile(r"event", re.IGNORECASE), timeout=10_000)
 
 
 @pytest.mark.ui
