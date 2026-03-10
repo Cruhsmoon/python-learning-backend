@@ -52,7 +52,7 @@ def normalize_name(name: str) -> str:
 # ASSERT TESTS
 # ===========================
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
 
     # validate_email
     assert validate_email(None) is False
