@@ -1,12 +1,4 @@
-"""
-BasePage
-========
-Shared base class for all Page Objects.
-
-Provides:
-  - Consistent navigation with networkidle wait.
-  - `current_url` and `page_title` convenience properties.
-"""
+"""BasePage — shared foundation for all Page Objects."""
 
 from __future__ import annotations
 
@@ -14,7 +6,17 @@ from playwright.sync_api import Page
 
 
 class BasePage:
-    """Minimal shared base for every Page Object in this project."""
+
+    """
+    Minimal base class shared by every Page Object.
+
+    Attributes
+    ----------
+    page : Page
+        The Playwright Page instance (public so subclasses and tests can use it).
+    base_url : str
+        Base URL without a trailing slash.
+    """
 
     def __init__(self, page: Page, base_url: str) -> None:
         self.page = page
@@ -23,7 +25,7 @@ class BasePage:
     # ── Navigation ───────────────────────────────────────────────────────────
 
     def navigate_to(self, path: str = "/") -> None:
-        """Go to ``base_url + path`` and wait until network is idle."""
+        """Go to ``base_url + path`` and wait until the network is idle."""
         self.page.goto(self.base_url + path)
         self.page.wait_for_load_state("networkidle")
 

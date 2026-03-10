@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from fastapi_app.main import User
+from src.api.main import User
 
 
 # ------------------------------------------------------------------ helpers --

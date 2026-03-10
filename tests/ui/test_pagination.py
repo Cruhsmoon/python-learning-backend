@@ -1,99 +1,91 @@
 """
 Pagination tests — tests/ui/test_pagination.py
 ================================================
-Verifies that the Greenbook search results page exposes a mechanism to load
-additional results and that using it changes the visible content.
+Verifies that the search results page exposes a mechanism to load additional
+results and that activating it changes the visible content.
 
-Greenbook uses a "View all" expansion button rather than traditional
-Next / Previous page controls.  All pagination tests skip gracefully when
-no such control exists (e.g., results fit on a single page).
+Greenbook uses a "View all" expansion button rather than Next / Previous page
+controls.  All tests skip gracefully when no such control is present.
 
-Scenarios:
-  1. Search results page displays a numeric result count.
-  2. A "View all" / "Load more" / "Next" control exists for large result sets.
-  3. Activating that control loads additional or different content.
+Tests
+-----
+1. Search results page displays a numeric result count.
+2. A "View all" or "Load more" control exists for large result sets.
+3. Activating the control loads additional or different content.
 """
 
 import pytest
 
-from tests.ui.pages.search_results_page import SearchResultsPage
+from tests.ui.pages.search_page import SearchPage
 
-# Use a broad query to maximise the chance of triggering pagination.
 _QUERY = "market research"
 
 
 @pytest.mark.ui
-def test_results_page_displays_count(page, base_url: str) -> None:
+def test_result_count_label_is_displayed(page, base_url: str) -> None:
     """
-    The search results page should show a numeric result count somewhere on
-    the page (e.g., '26 results').
+    The search results page should show a numeric result count
+    (e.g., '26 results') somewhere on the page.
     """
-    rp = SearchResultsPage(page, base_url)
-    rp.navigate(_QUERY)
+    sp = SearchPage(page, base_url)
+    sp.navigate(_QUERY)
     page.wait_for_load_state("networkidle")
 
-    count_el = rp.result_count_element
-    if count_el.count() == 0:
-        pytest.skip("Result count element not found on page.")
+    text = sp.results.result_count_text()
 
-    text = count_el.inner_text()
+    if not text:
+        pytest.skip("Result count label not found on page.")
+
     assert any(ch.isdigit() for ch in text), (
-        f"Result count element does not contain a number: {text!r}"
+        f"Result count label contains no digits: {text!r}"
     )
 
 
 @pytest.mark.ui
-def test_pagination_control_is_present(page, base_url: str) -> None:
+def test_pagination_control_exists(page, base_url: str) -> None:
     """
-    A 'View all', 'Load more', or 'Next' control should exist when the result
-    set does not fit in the initial view.  Skipped if results fit on one page.
+    A 'View all', 'Load more', or 'Next' control must exist when the result
+    set exceeds the initial view.  Skipped if all results fit on one screen.
     """
-    rp = SearchResultsPage(page, base_url)
-    rp.navigate(_QUERY)
+    sp = SearchPage(page, base_url)
+    sp.navigate(_QUERY)
     page.wait_for_load_state("networkidle")
 
-    if not rp.has_pagination_control():
+    if not sp.results.has_pagination_control():
         pytest.skip(
             "No pagination / load-more / view-all control found; "
             "all results may already be visible."
         )
 
-    assert rp.has_pagination_control()
+    assert sp.results.has_pagination_control()
 
 
 @pytest.mark.ui
-def test_pagination_control_loads_more_content(page, base_url: str) -> None:
+def test_view_all_expands_result_set(page, base_url: str) -> None:
     """
-    Clicking the pagination / 'View all' control must result in either:
-      - More result cards being visible, OR
-      - The browser URL changing (navigated to a new page).
+    Clicking the 'View all' control must result in either more cards being
+    visible or the URL changing to reflect pagination.
     """
-    rp = SearchResultsPage(page, base_url)
-    rp.navigate(_QUERY)
-    page.wait_for_selector(
-        "a[href*='/company/'], a[href*='/case-study/']", timeout=15_000
-    )
+    sp = SearchPage(page, base_url)
+    sp.navigate(_QUERY)
+    sp.results.wait_for_cards()
 
-    before_count = page.locator(
-        "a[href*='/company/'], a[href*='/case-study/']"
-    ).count()
+    all_content = "a[href*='/company/'], a[href*='/case-study/']"
+    before_count = page.locator(all_content).count()
     initial_url = page.url
 
-    if not rp.has_pagination_control():
-        pytest.skip("No pagination control found; cannot test loading more results.")
+    if not sp.results.has_pagination_control():
+        pytest.skip("No pagination control found; cannot test expansion.")
 
     try:
-        rp.click_next_or_view_all()
+        sp.results.click_view_all()
     except LookupError:
-        pytest.skip("Pagination control disappeared before it could be clicked.")
+        pytest.skip("Pagination control not clickable.")
 
-    after_count = page.locator(
-        "a[href*='/company/'], a[href*='/case-study/']"
-    ).count()
+    after_count = page.locator(all_content).count()
     url_changed = page.url != initial_url
 
     assert after_count >= before_count or url_changed, (
-        f"After clicking pagination control: "
-        f"item count {before_count} → {after_count}, "
+        f"After pagination: count {before_count} → {after_count}, "
         f"URL {'changed' if url_changed else 'unchanged'} ({page.url!r})"
     )

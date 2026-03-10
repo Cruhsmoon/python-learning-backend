@@ -17,8 +17,8 @@ Test groups:
 import pytest
 from celery.exceptions import MaxRetriesExceededError, SoftTimeLimitExceeded
 
-import workers.celery_app as celery_module
-from workers.celery_app import (
+import src.tasks.celery_app as celery_module
+from src.tasks.celery_app import (
     add,
     always_fails,
     flaky_task,

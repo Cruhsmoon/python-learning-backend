@@ -10,3 +10,13 @@ report.html
 htmlcov/
 *.db
 .hypothesis/
+
+# env files with suffixes
+.env.*
+
+# generated test artifacts
+screenshots/
+openapi.json
+
+# nested virtualenvs
+fastapi_app/.venv/

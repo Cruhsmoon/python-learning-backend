@@ -1,88 +1,84 @@
 """
 Filter tests — tests/ui/test_filters.py
 =========================================
-Verifies that result-type filters (content tabs) on the search results page
-work correctly.
+Verifies that content-type filter tabs on the search results page work.
 
-Greenbook does not expose a traditional checkbox filter sidebar; instead it
-uses content-type tabs (Specialties, Firms & Products, Articles, Case Studies)
-to narrow the visible result set.  Tests skip gracefully if no such controls
-are rendered by the current version of the site.
+Greenbook uses content-type tabs (Specialties, Firms & Products, Articles,
+Case Studies) instead of a traditional checkbox filter sidebar.  All tests
+skip gracefully when the site renders no such controls.
 
-Scenarios:
-  1. At least one content-type tab/filter control is present on the results page.
-  2. Clicking a filter tab keeps the user on the search results page.
-  3. After applying a filter the page still renders content (no blank/error).
+Tests
+-----
+1. Content-type tab controls are present on the results page.
+2. Clicking a tab keeps the user on the search results page.
+3. After applying a tab filter the page still renders content.
 """
 
 import pytest
 
-from tests.ui.pages.search_results_page import CONTENT_TABS, SearchResultsPage
+from tests.ui.pages.search_page import SearchPage
 
 _QUERY = "research"
 
 
 @pytest.mark.ui
-def test_filter_tab_controls_are_present(page, base_url: str) -> None:
+def test_filter_tabs_are_present(page, base_url: str) -> None:
     """
-    The search results page should expose at least one content-type filter tab.
-    The test is skipped if the site renders no such controls.
+    At least one content-type filter tab must be rendered on the search
+    results page for a typical query.
     """
-    rp = SearchResultsPage(page, base_url)
-    rp.navigate(_QUERY)
+    sp = SearchPage(page, base_url)
+    sp.navigate(_QUERY)
     page.wait_for_load_state("networkidle")
 
-    found = [name for name in CONTENT_TABS if rp.content_tab(name).count() > 0]
+    available = sp.filters.available_tabs()
 
-    if not found:
+    if not available:
         pytest.skip(
-            "No content-type filter tabs found on the search results page; "
-            "the site may use a different filtering mechanism."
+            "No content-type filter tabs found; site may have changed its UI."
         )
 
-    assert len(found) > 0, f"Expected filter tabs, found: {found}"
+    assert len(available) > 0, f"Expected filter tabs; found: {available}"
 
 
 @pytest.mark.ui
-def test_clicking_filter_tab_stays_on_results_page(page, base_url: str) -> None:
+def test_clicking_tab_keeps_user_on_search_page(page, base_url: str) -> None:
     """
-    Clicking a content-type tab must keep the user on the search results page
-    (URL still contains /keyword-search-results or q=).
+    Clicking a content-type tab must keep the browser on the search results
+    page (URL must still contain /keyword-search-results or q=).
     """
-    rp = SearchResultsPage(page, base_url)
-    rp.navigate(_QUERY)
-    page.wait_for_selector("a[href*='/company/']", timeout=15_000)
+    sp = SearchPage(page, base_url)
+    sp.navigate(_QUERY)
+    sp.results.wait_for_cards()
 
-    chosen = rp.first_available_tab()
-    if chosen is None:
-        pytest.skip("No content-type filter tab found; skipping filter interaction test.")
+    try:
+        sp.filters.click_first_available()
+    except LookupError:
+        pytest.skip("No content-type filter tabs found.")
 
-    rp.click_content_tab(chosen)
-
-    assert "keyword-search-results" in page.url or "q=" in page.url, (
-        f"Unexpected URL after clicking filter tab '{chosen}': {page.url!r}"
+    assert sp.is_on_search_page(), (
+        f"Unexpected URL after clicking filter tab: {page.url!r}"
     )
 
 
 @pytest.mark.ui
-def test_filter_tab_does_not_produce_empty_page(page, base_url: str) -> None:
+def test_filter_tab_does_not_empty_the_results_area(page, base_url: str) -> None:
     """
-    After applying any available filter the results area must still render
-    at least one content element (company card, article, or case study link).
+    After applying a filter tab at least one content element must remain
+    visible (no blank screen or error page).
     """
-    rp = SearchResultsPage(page, base_url)
-    rp.navigate(_QUERY)
+    sp = SearchPage(page, base_url)
+    sp.navigate(_QUERY)
     page.wait_for_load_state("networkidle")
 
-    chosen = rp.first_available_tab()
-    if chosen is None:
-        pytest.skip("No content-type filter tab found.")
-
-    rp.click_content_tab(chosen)
+    try:
+        sp.filters.click_first_available()
+    except LookupError:
+        pytest.skip("No content-type filter tabs found.")
 
     content = page.locator(
         "a[href*='/company/'], a[href*='/case-study/'], a[href*='/insights/']"
     )
     assert content.count() > 0 or page.locator("main").is_visible(), (
-        f"No content visible after applying filter tab '{chosen}'."
+        "No content visible after applying the filter tab."
     )

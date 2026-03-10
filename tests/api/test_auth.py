@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 import pytest
 
-from fastapi_app.main import SECRET_KEY, ALGORITHM
+from src.api.main import SECRET_KEY, ALGORITHM
 
 
 # ------------------------------------------------------------------ helpers --

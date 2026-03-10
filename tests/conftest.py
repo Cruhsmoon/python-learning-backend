@@ -1,3 +1,5 @@
+import os
+
 import pytest
 import pytest_html
 from fastapi.testclient import TestClient
@@ -6,8 +8,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-import fastapi_app.main as _app_module
-from fastapi_app.main import app, Base, get_db
+import src.api.main as _app_module
+from src.api.main import app, Base, get_db
 
 
 # ---------- Session-scoped SQLite engine ----------
@@ -27,7 +29,7 @@ def test_engine():
 # ---------- Swap production engine for SQLite across the whole session ----------
 #
 # Why autouse + session scope?
-# fastapi_app/main.py calls Base.metadata.create_all(bind=engine) inside the
+# src/api/main.py calls Base.metadata.create_all(bind=engine) inside the
 # lifespan handler.  That handler runs every time an ASGI client starts
 # (AsyncClient via ASGITransport, or TestClient as context manager).
 # By patching the module-level `engine` attribute once at session start we
@@ -119,139 +121,6 @@ def sync_client(test_engine):
     connection.exec_driver_sql("ROLLBACK")
     connection.close()
     app.dependency_overrides.pop(get_db, None)
-
-
-# ---------- Celery fixtures ----------
-#
-# task_always_eager=True  — tasks execute synchronously in the same process.
-# task_eager_propagates=True — exceptions raised inside tasks propagate to the
-#   caller instead of being swallowed into the result object.
-# memory:// broker + cache+memory:// backend — no real Redis or RabbitMQ needed.
-
-@pytest.fixture(scope="function")
-def celery_app():
-    """
-    Celery app configured for synchronous eager execution.
-    Changes are applied before each test and reverted after.
-    """
-    import workers.celery_app as _celery
-
-    original = {
-        "task_always_eager": _celery.app.conf.task_always_eager,
-        "task_eager_propagates": _celery.app.conf.task_eager_propagates,
-        "broker_url": _celery.app.conf.broker_url,
-        "result_backend": _celery.app.conf.result_backend,
-    }
-
-    _celery.app.conf.update(
-        task_always_eager=True,
-        task_eager_propagates=True,
-        broker_url="memory://",
-        result_backend="cache+memory://",
-    )
-
-    yield _celery.app
-
-    _celery.app.conf.update(original)
-
-
-@pytest.fixture(scope="function")
-def fake_redis():
-    """In-memory Redis substitute — no real Redis server required."""
-    import fakeredis
-    server = fakeredis.FakeServer()
-    return fakeredis.FakeRedis(server=server, decode_responses=False)
-
-
-# ---------- PostgreSQL fixtures ----------
-#
-# PG_DATABASE_URL points at the same database the app uses.  Every fixture here
-# wraps its work in a raw DBAPI-level BEGIN that is rolled back on teardown, so
-# no test data ever persists in PostgreSQL.
-
-PG_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/postgres"
-
-
-@pytest.fixture(scope="session")
-def pg_schema():
-    """Creates the app schema in real PostgreSQL once per test session.
-
-    Needed because patch_production_engine (autouse, session-scoped) redirects
-    Base.metadata.create_all() to the SQLite test engine, so PostgreSQL never
-    gets its tables created automatically.  This fixture fills that gap.
-    """
-    from sqlalchemy import create_engine as _create_engine
-    engine = _create_engine(PG_DATABASE_URL)
-    Base.metadata.create_all(bind=engine)
-    engine.dispose()
-    yield
-
-
-@pytest.fixture(scope="function")
-def db_session(pg_schema):
-    """
-    SQLAlchemy Session connected to real PostgreSQL.
-
-    Lifecycle:
-      1. Create a new engine and connection.
-      2. Start a DBAPI-level transaction (BEGIN).
-      3. Bind a Session to that connection.
-      4. Yield the session — tests use flush(), not commit().
-      5. Roll back on teardown — no data persists between tests.
-    """
-    from sqlalchemy import create_engine
-    engine = create_engine(PG_DATABASE_URL)
-    connection = engine.connect()
-    connection.exec_driver_sql("BEGIN")
-    session = Session(bind=connection)
-
-    yield session
-
-    session.close()
-    connection.exec_driver_sql("ROLLBACK")
-    connection.close()
-    engine.dispose()
-
-
-@pytest.fixture(scope="function")
-async def pg_async_client(pg_schema):
-    """
-    AsyncClient that drives the FastAPI app against real PostgreSQL.
-
-    The session-scoped patch_production_engine autouse fixture has already
-    replaced _app_module.engine with SQLite.  This fixture temporarily
-    restores the real PostgreSQL engine for the duration of one test, then
-    puts the SQLite engine back so other tests are unaffected.
-
-    Yields (client, session) so the caller can both make HTTP requests and
-    query the database directly to verify persistence.
-    """
-    from sqlalchemy import create_engine
-    pg_engine = create_engine(PG_DATABASE_URL)
-    connection = pg_engine.connect()
-    connection.exec_driver_sql("BEGIN")
-    # create_savepoint mode lets route-level db.commit() land inside the outer
-    # transaction instead of committing to the database for real.
-    session = Session(bind=connection, join_transaction_mode="create_savepoint")
-
-    # Temporarily override the SQLite patch with the real PostgreSQL engine.
-    saved_engine = _app_module.engine
-    _app_module.engine = pg_engine
-
-    def override_get_db():
-        yield session
-
-    app.dependency_overrides[get_db] = override_get_db
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        yield client, session
-
-    app.dependency_overrides.pop(get_db, None)
-    session.close()
-    connection.exec_driver_sql("ROLLBACK")
-    connection.close()
-    pg_engine.dispose()
-    _app_module.engine = saved_engine  # restore SQLite patch for remaining tests
 
 
 # ---------- Auth fixtures ----------

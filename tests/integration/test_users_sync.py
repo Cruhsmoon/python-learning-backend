@@ -8,7 +8,7 @@ on teardown, so tests are fully isolated from one another.
 
 import pytest
 
-from tests.factories import user_factory
+from tests.fixtures.factories import user_factory
 
 
 # ================================================================

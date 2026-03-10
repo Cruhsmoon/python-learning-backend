@@ -1,16 +1,15 @@
 """
 Smoke tests — tests/ui/test_smoke.py
-=====================================
+======================================
 Fast baseline checks that confirm the Greenbook homepage is reachable,
-correctly branded, and has its main navigation intact.
+correctly branded, and exposes the expected navigation structure.
 
-Scenarios:
-  1. Page title contains "Greenbook".
-  2. Main <nav> element is visible.
-  3. Navigation bar contains expected destination links.
+Tests
+-----
+1. Homepage title contains "Greenbook".
+2. Main <nav> navigation landmark is visible.
+3. Links to core site sections (Events, Insights) are present.
 """
-
-import re
 
 import pytest
 
@@ -23,39 +22,35 @@ def test_homepage_title_contains_greenbook(page, base_url: str) -> None:
     home = HomePage(page, base_url)
     home.navigate()
 
-    assert re.search(r"greenbook", home.page_title, re.IGNORECASE), (
-        f"Expected 'Greenbook' in page title, got: {home.page_title!r}"
+    assert "greenbook" in home.page_title.lower(), (
+        f"Expected 'Greenbook' in page title; got: {home.page_title!r}"
     )
 
 
 @pytest.mark.ui
-def test_main_navigation_is_visible(page, base_url: str) -> None:
-    """A <nav> / [role='navigation'] landmark must be present and visible."""
+def test_main_navigation_landmark_is_visible(page, base_url: str) -> None:
+    """A <nav> landmark must be present and visible on the homepage."""
     home = HomePage(page, base_url)
     home.navigate()
 
-    assert home.nav.is_visible(), (
-        "Main navigation element is not visible on the Greenbook homepage."
+    assert home.is_nav_visible(), (
+        "Main <nav> element is not visible on the Greenbook homepage."
     )
 
 
 @pytest.mark.ui
-def test_navigation_contains_key_destinations(page, base_url: str) -> None:
+def test_homepage_has_links_to_core_sections(page, base_url: str) -> None:
     """
-    Links to core site sections (Events, Insights) must be present on the
-    homepage.
+    Links to core site destinations must be reachable from the homepage.
 
-    Greenbook renders its primary navigation as plain <a> tags outside any
-    <nav> element, so we assert by href rather than by nav-container text.
+    Greenbook's primary nav links live outside the <nav> element, so we
+    assert by href presence rather than by nav-container text.
     """
     home = HomePage(page, base_url)
     home.navigate()
 
-    expected_hrefs = ["/events", "/insights"]
     missing = [
-        href for href in expected_hrefs
-        if page.locator(f"a[href='{href}']").count() == 0
+        href for href in ("/events", "/insights")
+        if not home.has_link_to(href)
     ]
-    assert not missing, (
-        f"Homepage is missing links to: {missing}"
-    )
+    assert not missing, f"Homepage is missing links to: {missing}"

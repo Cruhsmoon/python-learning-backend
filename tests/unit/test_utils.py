@@ -1,5 +1,5 @@
 import pytest
-from exercises.day4_functions import (
+from src.utils.functions import (
     validate_email,
     is_positive,
     format_price,

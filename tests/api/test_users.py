@@ -1,6 +1,6 @@
 import pytest
 
-from tests.factories import user_factory
+from tests.fixtures.factories import user_factory
 
 
 # ---------- POST /users: valid payloads ----------
