@@ -43,20 +43,20 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Gener
 
 
 @pytest.fixture(autouse=True)
-def screenshot_on_failure(request: pytest.FixtureRequest) -> Generator[None, None, None]:
+def screenshot_on_failure(request: pytest.FixtureRequest, page: Page) -> Generator[None, None, None]:
     """
     On UI test failure:
       1. Capture full-page screenshot bytes.
       2. Attach to Allure report (survives in CI artifacts).
       3. Also save to screenshots/ on disk for local debugging.
+
+    `page` is declared as an explicit parameter so pytest keeps the browser
+    alive until AFTER this fixture's teardown captures the screenshot
+    (fixture teardown runs in reverse setup order).
     """
     yield
 
     if not (hasattr(request.node, "rep_call") and request.node.rep_call.failed):
-        return
-
-    page: Page | None = request.node.funcargs.get("page")  # type: ignore[assignment]
-    if page is None:
         return
 
     try:

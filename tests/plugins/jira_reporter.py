@@ -2,14 +2,14 @@
 Jira bug reporter — tests/plugins/jira_reporter.py
 ====================================================
 Automatically creates a Jira Bug when a test fails.
+For UI (Playwright) tests the full-page screenshot saved by
+screenshot_on_failure is attached to the Jira issue.
 
 Activation
 ----------
 Set the environment variable before running pytest:
 
     JIRA_REPORT_FAILURES=1 pytest ...
-
-Or add it to your shell profile / CI environment.
 
 Configuration (via .env.jira or environment variables)
 -------------------------------------------------------
@@ -19,11 +19,18 @@ Configuration (via .env.jira or environment variables)
     JIRA_PROJECT_KEY   – Project key to create bugs in (default: KAN)
     JIRA_BUG_TYPE_ID   – Issue type ID for Bug (default: 10010)
 
+How it works
+------------
+1. When="call"  → failure is detected; failure info is stored on the item.
+2. When="teardown" → screenshots are already saved to screenshots/ by the
+   screenshot_on_failure fixture; bug is created/updated then screenshot
+   (if found) is uploaded as an attachment.
+
 Deduplication
 -------------
 Before creating a new issue the reporter searches for open bugs with the
-label  pytest-auto:<test_nodeid_hash>. If one already exists the run URL
-is added as a comment instead of opening a duplicate.
+label  pytest-auto:<test_nodeid_hash>. If one already exists the run is
+added as a comment and the screenshot is uploaded to the existing issue.
 """
 
 from __future__ import annotations
@@ -31,6 +38,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import textwrap
 from pathlib import Path
 from typing import Any
@@ -54,6 +62,18 @@ def _load_env_file(path: str) -> None:
 
 
 _load_env_file(str(Path(__file__).parent.parent.parent / ".env.jira"))
+
+
+# ── Screenshot path helper ────────────────────────────────────────────────────
+
+_SCREENSHOT_DIR = Path("screenshots")
+
+
+def _screenshot_path_for(nodeid: str) -> Path | None:
+    """Return the screenshot path saved by screenshot_on_failure, or None."""
+    safe_name = re.sub(r"[^\w._-]", "_", nodeid)
+    p = _SCREENSHOT_DIR / f"{safe_name}.png"
+    return p if p.exists() else None
 
 
 # ── Jira client ───────────────────────────────────────────────────────────────
@@ -122,6 +142,25 @@ class _JiraClient:
         }
         self._api("POST", f"/issue/{issue_key}/comment", content=json.dumps(body))
 
+    def attach_screenshot(self, issue_key: str, screenshot_path: Path) -> None:
+        """
+        Upload a PNG screenshot as an attachment to the given Jira issue.
+
+        Jira requires the no-verify CSRF token header for multipart uploads.
+        """
+        url = f"{self.base_url}/rest/api/3/issue/{issue_key}/attachments"
+        with screenshot_path.open("rb") as f:
+            resp = self._client.post(
+                url,
+                headers={
+                    "X-Atlassian-Token": "no-check",
+                    "Accept": "application/json",
+                    # Do NOT set Content-Type here — httpx sets multipart boundary
+                },
+                files={"file": (screenshot_path.name, f, "image/png")},
+            )
+        resp.raise_for_status()
+
     def close(self) -> None:
         self._client.close()
 
@@ -155,19 +194,27 @@ def _adf_code_block(code: str, language: str = "text") -> dict:
     }
 
 
-def _build_description(nodeid: str, longrepr: str) -> dict:
+def _build_description(nodeid: str, longrepr: str, has_screenshot: bool) -> dict:
     truncated = textwrap.shorten(longrepr, width=10_000, placeholder="\n…(truncated)")
-    return _adf_doc(
+    blocks = [
         _adf_heading("Test Information", level=2),
         _adf_paragraph(f"Test: {nodeid}"),
         _adf_heading("Failure Details", level=2),
         _adf_code_block(truncated, language="text"),
         _adf_heading("How to Reproduce", level=2),
         _adf_paragraph(f"pytest {nodeid}"),
-    )
+    ]
+    if has_screenshot:
+        blocks.append(_adf_heading("Screenshot", level=2))
+        blocks.append(_adf_paragraph("A full-page screenshot is attached to this issue."))
+    return _adf_doc(*blocks)
 
 
 # ── Pytest plugin ─────────────────────────────────────────────────────────────
+
+# Key used to store failure info on the item between call and teardown phases
+_FAILURE_KEY = "_jira_failure_info"
+
 
 class JiraReporterPlugin:
     """Pytest plugin: creates a Jira Bug for each failed test."""
@@ -192,37 +239,53 @@ class JiraReporterPlugin:
         outcome = yield
         rep = outcome.get_result()
 
-        if rep.when != "call" or not rep.failed:
-            return
+        if rep.when == "call" and rep.failed:
+            # Phase 1: store failure info for use in teardown phase
+            longrepr = str(rep.longrepr) if rep.longrepr else "No traceback available."
+            setattr(item, _FAILURE_KEY, {"nodeid": item.nodeid, "longrepr": longrepr})
 
-        client = self._get_client()
-        if client is None:
-            return
+        elif rep.when == "teardown":
+            # Phase 2: screenshot is now on disk (saved by screenshot_on_failure fixture)
+            failure_info = getattr(item, _FAILURE_KEY, None)
+            if failure_info is None:
+                return  # test didn't fail in call phase
 
-        longrepr = str(rep.longrepr) if rep.longrepr else "No traceback available."
-        nodeid = item.nodeid
+            client = self._get_client()
+            if client is None:
+                return
 
-        # Stable label for deduplication
-        label_hash = hashlib.sha1(nodeid.encode()).hexdigest()[:12]
-        dedup_label = f"pytest-auto:{label_hash}"
+            nodeid = failure_info["nodeid"]
+            longrepr = failure_info["longrepr"]
+            screenshot = _screenshot_path_for(nodeid)
 
-        summary = f"[TEST FAIL] {nodeid}"
-        description = _build_description(nodeid, longrepr)
-        labels = ["pytest-auto", "automated-test-failure", dedup_label]
+            label_hash = hashlib.sha1(nodeid.encode()).hexdigest()[:12]
+            dedup_label = f"pytest-auto:{label_hash}"
+            summary = f"[TEST FAIL] {nodeid}"
+            description = _build_description(nodeid, longrepr, has_screenshot=screenshot is not None)
+            labels = ["pytest-auto", "automated-test-failure", dedup_label]
 
-        try:
-            existing = client.find_open_bug(dedup_label)
-            if existing:
-                client.add_comment(
-                    existing,
-                    f"Test failed again in a new run.\n\nTest: {nodeid}",
-                )
-                print(f"\n[jira-reporter] Updated existing bug {existing} ({nodeid})")
-            else:
-                key = client.create_bug(summary, description, labels)
-                print(f"\n[jira-reporter] Created Jira bug {key} → {client.base_url}/browse/{key}")
-        except Exception as exc:
-            print(f"\n[jira-reporter] ERROR creating Jira issue for {nodeid}: {exc}")
+            try:
+                existing = client.find_open_bug(dedup_label)
+                if existing:
+                    client.add_comment(
+                        existing,
+                        f"Test failed again in a new run.\n\nTest: {nodeid}",
+                    )
+                    issue_key = existing
+                    print(f"\n[jira-reporter] Updated existing bug {issue_key} ({nodeid})")
+                else:
+                    issue_key = client.create_bug(summary, description, labels)
+                    print(
+                        f"\n[jira-reporter] Created Jira bug {issue_key} "
+                        f"→ {client.base_url}/browse/{issue_key}"
+                    )
+
+                if screenshot:
+                    client.attach_screenshot(issue_key, screenshot)
+                    print(f"[jira-reporter] Attached screenshot to {issue_key}: {screenshot}")
+
+            except Exception as exc:
+                print(f"\n[jira-reporter] ERROR reporting Jira issue for {nodeid}: {exc}")
 
     def pytest_sessionfinish(self, session, exitstatus) -> None:
         if self._client:
