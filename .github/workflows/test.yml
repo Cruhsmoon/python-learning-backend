@@ -87,6 +87,72 @@ jobs:
           path: allure-results/
           retention-days: 7
 
+  # ── Pact consumer-driven contract tests ─────────────────────────────────────
+  pact-test:
+    runs-on: ubuntu-latest
+
+    env:
+      ALLURE_RESULTS_DIR: allure-results-pact
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run consumer tests (generate pact files)
+        run: |
+          pytest tests/pact/test_users_consumer.py \
+            -m contract \
+            --alluredir=allure-results-pact \
+            -v
+
+      - name: Run provider verification + breaking change detection
+        run: |
+          pytest tests/pact/test_users_provider.py tests/pact/test_breaking_change.py \
+            -m contract \
+            --alluredir=allure-results-pact \
+            -v
+
+      - name: Install Allure CLI
+        if: always()
+        run: |
+          curl -sLo allure.tgz \
+            https://github.com/allure-framework/allure2/releases/download/2.29.0/allure-2.29.0.tgz
+          tar -xzf allure.tgz
+          echo "$(pwd)/allure-2.29.0/bin" >> $GITHUB_PATH
+
+      - name: Generate Allure HTML report
+        if: always()
+        run: |
+          allure generate allure-results-pact \
+            --clean \
+            -o allure-report-pact
+
+      - name: Upload Pact Allure report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report-pact-${{ github.run_number }}
+          path: allure-report-pact/
+          retention-days: 30
+
+      - name: Upload generated pact files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pact-files-${{ github.run_number }}
+          path: tests/pact/pacts/
+          retention-days: 30
+
   # ── UI / Playwright end-to-end tests ────────────────────────────────────────
   ui-test:
     runs-on: ubuntu-latest

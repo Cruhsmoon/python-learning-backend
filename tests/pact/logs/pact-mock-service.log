@@ -1,0 +1,145 @@
+I, [2026-03-12T22:58:27.616917 #61121]  INFO -- : Cleared interactions
+I, [2026-03-12T22:58:27.619345 #61121]  INFO -- : Registered expected interaction GET /users
+D, [2026-03-12T22:58:27.619456 #61121] DEBUG -- : {
+  "description": "a GET request for all users",
+  "providerState": "users exist",
+  "request": {
+    "method": "GET",
+    "path": "/users"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "json_class": "Pact::ArrayLike",
+      "contents": {
+        "id": {
+          "json_class": "Pact::SomethingLike",
+          "contents": 1
+        },
+        "name": {
+          "json_class": "Pact::SomethingLike",
+          "contents": "Alice"
+        },
+        "email": {
+          "json_class": "Pact::SomethingLike",
+          "contents": "alice@example.com"
+        }
+      },
+      "min": 1
+    }
+  },
+  "metadata": null
+}
+I, [2026-03-12T22:58:27.655196 #61121]  INFO -- : Received request GET /users
+D, [2026-03-12T22:58:27.655267 #61121] DEBUG -- : {
+  "path": "/users",
+  "query": "",
+  "method": "get",
+  "headers": {
+    "Host": "localhost:1234",
+    "Accept": "*/*",
+    "Accept-Encoding": "gzip, deflate",
+    "Connection": "keep-alive",
+    "User-Agent": "python-httpx/0.28.1",
+    "Version": "HTTP/1.1"
+  }
+}
+I, [2026-03-12T22:58:27.655645 #61121]  INFO -- : Found matching response for GET /users
+D, [2026-03-12T22:58:27.655677 #61121] DEBUG -- : {
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "body": {
+    "json_class": "Pact::ArrayLike",
+    "contents": {
+      "id": {
+        "json_class": "Pact::SomethingLike",
+        "contents": 1
+      },
+      "name": {
+        "json_class": "Pact::SomethingLike",
+        "contents": "Alice"
+      },
+      "email": {
+        "json_class": "Pact::SomethingLike",
+        "contents": "alice@example.com"
+      }
+    },
+    "min": 1
+  }
+}
+I, [2026-03-12T22:58:27.657400 #61121]  INFO -- : Verifying - interactions matched
+I, [2026-03-12T22:58:27.658770 #61121]  INFO -- : Writing pact for users-provider to /Users/khokhlov/PyCharmMiscProject/tests/pact/pacts/users-consumer-users-provider.json
+I, [2026-03-12T22:58:27.661560 #61121]  INFO -- : Cleared interactions
+I, [2026-03-12T22:58:27.663030 #61121]  INFO -- : Registered expected interaction POST /users
+D, [2026-03-12T22:58:27.663073 #61121] DEBUG -- : {
+  "description": "a POST request to create a user",
+  "providerState": "user data is valid",
+  "request": {
+    "method": "POST",
+    "path": "/users",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "name": "Bob",
+      "email": "bob@example.com"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "id": {
+        "json_class": "Pact::SomethingLike",
+        "contents": 42
+      },
+      "name": "Bob",
+      "email": "bob@example.com"
+    }
+  },
+  "metadata": null
+}
+I, [2026-03-12T22:58:27.678198 #61121]  INFO -- : Received request POST /users
+D, [2026-03-12T22:58:27.678292 #61121] DEBUG -- : {
+  "path": "/users",
+  "query": "",
+  "method": "post",
+  "body": {
+    "name": "Bob",
+    "email": "bob@example.com"
+  },
+  "headers": {
+    "Content-Length": "40",
+    "Content-Type": "application/json",
+    "Host": "localhost:1234",
+    "Accept": "*/*",
+    "Accept-Encoding": "gzip, deflate",
+    "Connection": "keep-alive",
+    "User-Agent": "python-httpx/0.28.1",
+    "Version": "HTTP/1.1"
+  }
+}
+I, [2026-03-12T22:58:27.678400 #61121]  INFO -- : Found matching response for POST /users
+D, [2026-03-12T22:58:27.678430 #61121] DEBUG -- : {
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "body": {
+    "id": {
+      "json_class": "Pact::SomethingLike",
+      "contents": 42
+    },
+    "name": "Bob",
+    "email": "bob@example.com"
+  }
+}
+I, [2026-03-12T22:58:27.680057 #61121]  INFO -- : Verifying - interactions matched
+I, [2026-03-12T22:58:27.681734 #61121]  INFO -- : Writing pact for users-provider to /Users/khokhlov/PyCharmMiscProject/tests/pact/pacts/users-consumer-users-provider.json
