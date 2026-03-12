@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Generator
 
@@ -78,3 +79,18 @@ def screenshot_on_failure(request: pytest.FixtureRequest) -> Generator[None, Non
         (screenshot_dir / f"{safe_name}.png").write_bytes(screenshot_bytes)
     except Exception:
         pass
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """
+    After the UI test session ends, automatically open the Allure report
+    when --alluredir was passed and we are NOT running in CI.
+    """
+    if os.environ.get("CI"):
+        return
+
+    alluredir = session.config.getoption("--alluredir", default=None)
+    if not alluredir or not Path(alluredir).exists():
+        return
+
+    subprocess.Popen(["allure", "serve", alluredir])
