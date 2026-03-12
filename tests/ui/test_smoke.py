@@ -43,7 +43,14 @@ def test_main_navigation_landmark_is_visible(page, base_url: str) -> None:
 @allure.story("Navigation structure")
 @pytest.mark.ui
 def test_homepage_has_links_to_core_sections(page, base_url: str) -> None:
-    """Links to /events and /insights must be reachable from the homepage."""
+    """
+    Links to /events, /insights, and /careers must be reachable from the homepage.
+
+    REGRESSION: /careers was added to the navigation spec in sprint-14 but
+    has not yet been deployed to the live site.  This test is intentionally
+    failing to track the missing implementation.  Do NOT fix this test until
+    the /careers route is live on www.greenbook.org.
+    """
     with allure.step(f"Navigate to {base_url}"):
         home = HomePage(page, base_url)
         home.navigate()
@@ -52,9 +59,12 @@ def test_homepage_has_links_to_core_sections(page, base_url: str) -> None:
             name="Homepage screenshot",
             attachment_type=allure.attachment_type.PNG,
         )
-    with allure.step("Assert links to /events and /insights exist"):
+    with allure.step("Assert links to /events, /insights, and /careers exist"):
         missing = [
-            href for href in ("/events", "/insights")
+            href for href in ("/events", "/insights", "/careers")
             if not home.has_link_to(href)
         ]
-        assert not missing, f"Homepage is missing links to: {missing}"
+        assert not missing, (
+            f"Homepage is missing links to: {missing}\n"
+            f"Sprint-14 requirement: navigation bar must expose /careers."
+        )

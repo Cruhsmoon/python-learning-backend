@@ -148,21 +148,213 @@ def _adf_code_block(code: str, language: str = "text") -> dict:
             "content": [{"type": "text", "text": code}]}
 
 
-def _build_description(nodeid: str, longrepr: str, has_screenshot: bool) -> dict:
-    truncated = textwrap.shorten(longrepr, width=10_000, placeholder="\n…(truncated)")
+def _adf_bullet_list(items: list[str]) -> dict:
+    """Build an ADF bulletList from a list of plain-text strings."""
+    return {
+        "type": "bulletList",
+        "content": [
+            {
+                "type": "listItem",
+                "content": [_adf_paragraph(item)],
+            }
+            for item in items
+        ],
+    }
+
+
+def _adf_ordered_list(items: list[str]) -> dict:
+    """Build an ADF orderedList from a list of plain-text strings."""
+    return {
+        "type": "orderedList",
+        "content": [
+            {
+                "type": "listItem",
+                "content": [_adf_paragraph(item)],
+            }
+            for item in items
+        ],
+    }
+
+
+def _generate_action_plan(
+    nodeid: str,
+    longrepr: str,
+    ctx: dict,
+    base_url: str,
+) -> list[str]:
+    """
+    Produce a concrete, context-aware action plan for the assigned developer.
+
+    Rules:
+      - Always starts with reproduce + recent-commits steps.
+      - Adds error-type-specific investigation steps.
+      - If similar bugs exist, references them explicitly.
+      - If the test is a UI test, adds browser-inspection steps.
+      - Closes with fix-or-update step.
+    """
+    from pathlib import Path as _Path
+    from tests.plugins.jira_context import _extract_error_type
+
+    test_file = _Path(nodeid.split("::")[0]).name
+    test_name = nodeid.split("::")[-1]
+    error_type = _extract_error_type(longrepr) or "unknown error"
+    is_ui = "ui" in nodeid or "playwright" in longrepr.lower()
+    endpoint = ctx.get("test_context", {}).get("endpoint")
+    similar = ctx.get("similar_bugs", [])
+
+    steps: list[str] = []
+
+    # Step 1 — reproduce
+    steps.append(
+        f"Reproduce the failure locally:\n"
+        f"  JIRA_REPORT_FAILURES=1 pytest \"{nodeid}\" -v"
+        + (" -m ui" if is_ui else "")
+    )
+
+    # Step 2 — recent commits
+    steps.append(
+        f"Review recent commits that touched {test_file} or related source files:\n"
+        f"  git log --oneline --since='7 days ago' -- tests/ui/ src/"
+    )
+
+    # Step 3 — error-specific investigation
+    if "missing links" in longrepr.lower() or "has_link_to" in longrepr.lower():
+        # Extract the missing links from the error message
+        import re as _re
+        link_match = _re.search(r"missing links to:\s*(\[.*?\])", longrepr)
+        missing = link_match.group(1) if link_match else "the expected hrefs"
+        steps.append(
+            f"Open {base_url.replace(ctx.get('jira_project',''), '').rstrip('/')} "
+            f"in a browser and verify the navigation bar — check whether "
+            f"{missing} appear as <a> elements in the DOM."
+        )
+        steps.append(
+            "Search the frontend codebase for the missing route:\n"
+            "  grep -r 'careers\\|/careers' src/ --include='*.js' --include='*.ts'"
+        )
+    elif error_type == "AssertionError":
+        steps.append(
+            "Inspect the assertion that failed — compare the actual value printed "
+            "in the traceback against the expected value hard-coded in the test. "
+            "Determine whether the application or the test expectation has drifted."
+        )
+    elif "TimeoutError" in error_type or "timeout" in longrepr.lower():
+        steps.append(
+            "The element did not appear within the timeout. "
+            "Check: (a) selector is still correct, (b) page is not behind a loader/spinner, "
+            "(c) network latency did not increase. Increase timeout temporarily to confirm."
+        )
+    elif error_type != "unknown error":
+        steps.append(
+            f"Investigate the root cause of {error_type}. "
+            "Read the full traceback attached to this issue and identify the "
+            "first frame in application code (not framework code)."
+        )
+
+    # Step 4 — UI-specific
+    if is_ui:
+        steps.append(
+            "Open the full-page screenshot attached to this issue. "
+            "Visually confirm the page state at the moment of failure — "
+            "check for unexpected modals, cookie banners, or layout shifts."
+        )
+
+    # Step 5 — endpoint-specific
+    if endpoint:
+        steps.append(
+            f"If the failure is related to API endpoint {endpoint}, "
+            "verify the endpoint contract with:\n"
+            f"  pytest tests/api/ -k \"{endpoint.strip('/').replace('/', '_')}\" -v"
+        )
+
+    # Step 6 — similar issues
+    if similar:
+        refs = ", ".join(
+            f"{b['key']} ({b.get('match_reason', 'similar')})" for b in similar[:3]
+        )
+        steps.append(
+            f"Review similar open issues for context before starting a fix: {refs}. "
+            "Their comments may contain a root-cause analysis or a partial fix."
+        )
+
+    # Step 7 — resolution
+    steps.append(
+        "Once the root cause is identified:\n"
+        "  (a) Fix the application code and verify the test passes, OR\n"
+        "  (b) If the test expectation is wrong, update it with a clear comment "
+        "explaining why, and get a second reviewer to approve."
+    )
+
+    return steps
+
+
+def _build_description(
+    nodeid: str,
+    longrepr: str,
+    has_screenshot: bool,
+    ctx: dict,
+    base_url: str,
+) -> dict:
+    from pathlib import Path as _Path
+    from tests.plugins.jira_context import _extract_error_type
+
+    test_file = _Path(nodeid.split("::")[0]).name
+    error_type = _extract_error_type(longrepr) or "—"
+    endpoint = ctx.get("test_context", {}).get("endpoint", "—")
+    similar = ctx.get("similar_bugs", [])
+    recommendation = ctx.get("recommendation", "")
+    truncated = textwrap.shorten(longrepr, width=8_000, placeholder="\n…(truncated)")
+    action_steps = _generate_action_plan(nodeid, longrepr, ctx, base_url)
+
     blocks = [
-        _adf_heading("Test Information", level=2),
-        _adf_paragraph(f"Test: {nodeid}"),
-        _adf_heading("Failure Details", level=2),
+        # ── Summary ──────────────────────────────────────────────────────────
+        _adf_heading("Bug Summary", level=2),
+        _adf_bullet_list([
+            f"Test file:      {test_file}",
+            f"Full node ID:   {nodeid}",
+            f"Error type:     {error_type}",
+            f"Endpoint:       {endpoint}",
+            f"Duplicate check: {recommendation}",
+        ]),
+
+        # ── Failure traceback ─────────────────────────────────────────────────
+        _adf_heading("Failure Traceback", level=2),
         _adf_code_block(truncated, language="text"),
+
+        # ── How to reproduce ──────────────────────────────────────────────────
         _adf_heading("How to Reproduce", level=2),
-        _adf_paragraph(f"pytest {nodeid}"),
+        _adf_code_block(
+            f"# From the project root:\n"
+            f"JIRA_REPORT_FAILURES=1 pytest \"{nodeid}\" -v"
+            + (" -m ui --tb=short" if "ui" in nodeid else " --tb=short"),
+            language="bash",
+        ),
     ]
+
+    # ── Screenshot notice ─────────────────────────────────────────────────────
     if has_screenshot:
         blocks += [
             _adf_heading("Screenshot", level=2),
-            _adf_paragraph("A full-page screenshot is attached to this issue."),
+            _adf_paragraph(
+                "A full-page Playwright screenshot captured at the moment of failure "
+                "is attached to this issue. Open it to see the exact browser state."
+            ),
         ]
+
+    # ── Similar issues ────────────────────────────────────────────────────────
+    if similar:
+        blocks.append(_adf_heading("Related Issues", level=2))
+        blocks.append(
+            _adf_bullet_list([
+                f"{b['key']} [{b.get('match_reason', 'similar')}] — {b['summary']} ({b['status']})"
+                for b in similar[:5]
+            ])
+        )
+
+    # ── Action plan ───────────────────────────────────────────────────────────
+    blocks.append(_adf_heading("Action Plan", level=2))
+    blocks.append(_adf_ordered_list(action_steps))
+
     return _adf_doc(*blocks)
 
 
@@ -253,7 +445,12 @@ class JiraReporterPlugin:
                     print(f"\n[jira-reporter] Updated {issue_key} ({nodeid})")
                 else:
                     summary = f"[TEST FAIL] {nodeid}"
-                    description = _build_description(nodeid, longrepr, has_screenshot=bool(screenshot))
+                    description = _build_description(
+                        nodeid, longrepr,
+                        has_screenshot=bool(screenshot),
+                        ctx=ctx,
+                        base_url=client.base_url,
+                    )
                     labels = ["pytest-auto", "automated-test-failure", dedup_label]
                     issue_key = client.create_bug(summary, description, labels)
                     similar = ctx.get("similar_bugs", [])
