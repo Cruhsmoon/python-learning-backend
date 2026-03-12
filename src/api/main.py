@@ -60,6 +60,25 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
+
+
+class UserResponse(BaseModel):
+    id: int
+    name: str
+    email: str
+
+    model_config = {"from_attributes": True}
+
+
+class MeResponse(BaseModel):
+    id: int
+    username: str
+    role: str
+
+
 # -------------------- DB Dependency --------------------
 
 def get_db():
@@ -104,7 +123,7 @@ def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
 
 # -------------------- Auth Routes --------------------
 
-@app.post("/auth/login")
+@app.post("/auth/login", response_model=TokenResponse)
 def login(credentials: LoginRequest):
     user = USERS_DB.get(credentials.username)
     if not user or user["password"] != credentials.password:
@@ -113,7 +132,7 @@ def login(credentials: LoginRequest):
     return {"access_token": token, "token_type": "bearer"}
 
 
-@app.get("/users/me")
+@app.get("/users/me", response_model=MeResponse)
 def get_me(current_user: dict = Depends(get_current_user)):
     return {
         "id": current_user["id"],
@@ -122,7 +141,7 @@ def get_me(current_user: dict = Depends(get_current_user)):
     }
 
 
-@app.get("/admin/users")
+@app.get("/admin/users", response_model=list[UserResponse])
 def admin_list_users(
     current_user: dict = Depends(require_admin),
     db: Session = Depends(get_db),
@@ -132,7 +151,7 @@ def admin_list_users(
 
 # -------------------- User Routes --------------------
 
-@app.post("/users")
+@app.post("/users", response_model=UserResponse)
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
     db_user = User(name=user.name, email=user.email)
     db.add(db_user)
@@ -141,6 +160,6 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
     return db_user
 
 
-@app.get("/users")
+@app.get("/users", response_model=list[UserResponse])
 def get_users(db: Session = Depends(get_db)):
     return db.query(User).all()

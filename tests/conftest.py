@@ -1,5 +1,9 @@
+import json
 import os
+import sys
+from pathlib import Path
 
+import allure
 import pytest
 import pytest_html
 from fastapi.testclient import TestClient
@@ -12,7 +16,21 @@ import src.api.main as _app_module
 from src.api.main import app, Base, get_db
 
 
-# ---------- Session-scoped SQLite engine ----------
+# ── Worker identity (xdist) ───────────────────────────────────────────────────
+
+@pytest.fixture(scope="session")
+def worker_id() -> str:
+    """xdist worker id, or 'main' when running without xdist."""
+    return os.environ.get("PYTEST_XDIST_WORKER", "main")
+
+
+@pytest.fixture(scope="session")
+def worker_tmp_dir(tmp_path_factory, worker_id: str) -> Path:
+    """Temporary directory unique to this worker."""
+    return tmp_path_factory.mktemp(f"worker_{worker_id}")
+
+
+# ── Session-scoped SQLite engine ──────────────────────────────────────────────
 
 @pytest.fixture(scope="session")
 def test_engine():
@@ -26,16 +44,6 @@ def test_engine():
     Base.metadata.drop_all(bind=engine)
 
 
-# ---------- Swap production engine for SQLite across the whole session ----------
-#
-# Why autouse + session scope?
-# src/api/main.py calls Base.metadata.create_all(bind=engine) inside the
-# lifespan handler.  That handler runs every time an ASGI client starts
-# (AsyncClient via ASGITransport, or TestClient as context manager).
-# By patching the module-level `engine` attribute once at session start we
-# ensure every lifespan invocation uses SQLite instead of PostgreSQL, so tests
-# work without a running database server.
-
 @pytest.fixture(scope="session", autouse=True)
 def patch_production_engine(test_engine):
     original = _app_module.engine
@@ -44,7 +52,41 @@ def patch_production_engine(test_engine):
     _app_module.engine = original
 
 
-# ---------- DB snapshot helper for HTML report ----------
+# ── Allure environment info ───────────────────────────────────────────────────
+
+def _pkg_version(name: str) -> str:
+    try:
+        from importlib.metadata import version
+        return version(name)
+    except Exception:
+        return "unknown"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def allure_environment():
+    """Write environment.properties to allure-results/ after the session."""
+    yield
+
+    alluredir = os.environ.get("ALLURE_RESULTS_DIR", "allure-results")
+    if not os.path.isdir(alluredir):
+        return
+
+    props = {
+        "Python": sys.version.split()[0],
+        "FastAPI": _pkg_version("fastapi"),
+        "pytest": _pkg_version("pytest"),
+        "DB": "SQLite in-memory (unit/api) / PostgreSQL (integration)",
+        "Git.SHA": os.environ.get("GITHUB_SHA", "local"),
+        "Git.Branch": os.environ.get("GITHUB_REF_NAME", "local"),
+        "CI": os.environ.get("CI", "false"),
+    }
+
+    with open(os.path.join(alluredir, "environment.properties"), "w") as f:
+        for key, value in props.items():
+            f.write(f"{key}={value}\n")
+
+
+# ── DB helpers ────────────────────────────────────────────────────────────────
 
 def db_rows_as_html(session: Session) -> str:
     rows = session.execute(text("SELECT id, name, email FROM users")).fetchall()
@@ -61,11 +103,51 @@ def db_rows_as_html(session: Session) -> str:
     )
 
 
-# ---------- Async client — per-test transaction rollback ----------
-#
-# Uses a real DBAPI-level BEGIN so that SQLite savepoints work correctly.
-# The savepoint lets each request's commit land inside the transaction;
-# the outer ROLLBACK at teardown erases everything, keeping tests isolated.
+def _attach_db_snapshot_to_allure(session: Session) -> None:
+    rows = session.execute(text("SELECT id, name, email FROM users")).fetchall()
+    if not rows:
+        return
+    lines = ["id,name,email"] + [f"{r[0]},{r[1]},{r[2]}" for r in rows]
+    allure.attach(
+        "\n".join(lines),
+        name="DB snapshot (users)",
+        attachment_type=allure.attachment_type.CSV,
+    )
+
+
+# ── httpx event hooks for Allure request/response logging ────────────────────
+
+async def _log_request(request) -> None:
+    body = ""
+    if request.content:
+        try:
+            body = json.dumps(json.loads(request.content), indent=2, ensure_ascii=False)
+        except Exception:
+            body = request.content.decode("utf-8", errors="replace")
+    allure.attach(
+        f"{request.method} {request.url}\n\nHeaders:\n"
+        f"{json.dumps(dict(request.headers), indent=2)}\n\nBody:\n{body}",
+        name=f"→ {request.method} {request.url.path}",
+        attachment_type=allure.attachment_type.TEXT,
+    )
+
+
+async def _log_response(response) -> None:
+    await response.aread()
+    try:
+        body = json.dumps(response.json(), indent=2, ensure_ascii=False)
+        attachment_type = allure.attachment_type.JSON
+    except Exception:
+        body = response.text
+        attachment_type = allure.attachment_type.TEXT
+    allure.attach(
+        body,
+        name=f"← {response.status_code} {response.request.url.path}",
+        attachment_type=attachment_type,
+    )
+
+
+# ── Async client ──────────────────────────────────────────────────────────────
 
 @pytest.fixture(scope="function")
 async def async_client(request, test_engine):
@@ -79,9 +161,12 @@ async def async_client(request, test_engine):
     app.dependency_overrides[get_db] = override_get_db
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        client.event_hooks["request"].append(_log_request)
+        client.event_hooks["response"].append(_log_response)
         yield client
 
     request.node._db_snapshot_html = db_rows_as_html(session)
+    _attach_db_snapshot_to_allure(session)
 
     session.close()
     connection.exec_driver_sql("ROLLBACK")
@@ -89,12 +174,7 @@ async def async_client(request, test_engine):
     app.dependency_overrides.pop(get_db, None)
 
 
-# ---------- Sync client — per-test transaction rollback ----------
-#
-# Same isolation strategy as async_client but using Starlette's synchronous
-# TestClient.  TestClient runs the ASGI lifespan when used as a context
-# manager; because patch_production_engine has already replaced the module
-# engine with SQLite, the lifespan create_all() is a no-op (tables exist).
+# ── Sync client ───────────────────────────────────────────────────────────────
 
 @pytest.fixture(scope="function")
 def sync_client(test_engine):
@@ -107,13 +187,6 @@ def sync_client(test_engine):
 
     app.dependency_overrides[get_db] = override_get_db
 
-    # Do NOT use TestClient as a context manager here.
-    # The context manager runs the ASGI lifespan, which calls
-    # Base.metadata.create_all(bind=engine).  With StaticPool there is only
-    # one DBAPI connection; create_all acquires it and issues an internal
-    # COMMIT, which silently ends our outer BEGIN transaction and makes the
-    # teardown ROLLBACK fail.  Tables are already created by the session-scoped
-    # test_engine fixture, so skipping the lifespan is safe.
     client = TestClient(app, raise_server_exceptions=True)
     yield client
 
@@ -123,11 +196,10 @@ def sync_client(test_engine):
     app.dependency_overrides.pop(get_db, None)
 
 
-# ---------- Auth fixtures ----------
+# ── Auth fixtures ─────────────────────────────────────────────────────────────
 
 @pytest.fixture
 async def auth_token(async_client):
-    """Logs in as testuser and returns the JWT access_token string."""
     response = await async_client.post(
         "/auth/login",
         json={"username": "testuser", "password": "testpass"},
@@ -138,11 +210,28 @@ async def auth_token(async_client):
 
 @pytest.fixture
 def auth_headers(auth_token):
-    """Returns an Authorization header dict ready to pass to httpx."""
     return {"Authorization": f"Bearer {auth_token}"}
 
 
-# ---------- HTML report: attach DB snapshot to each test ----------
+# ── JSON Schema validation fixture ────────────────────────────────────────────
+
+@pytest.fixture
+def validate_schema():
+    """
+    Validates an httpx Response body against a JSON Schema dict.
+
+    Usage:
+        validate_schema(response, USER_RESPONSE)
+    """
+    from tests.schemas._base import validate_response as _validate
+
+    def _check(response, schema: dict) -> None:
+        _validate(response, schema)
+
+    return _check
+
+
+# ── HTML report: DB snapshot attachment ──────────────────────────────────────
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):

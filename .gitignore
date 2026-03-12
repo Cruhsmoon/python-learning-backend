@@ -20,3 +20,12 @@ openapi.json
 
 # nested virtualenvs
 fastapi_app/.venv/
+
+allure-results/
+allure-results-ui/
+allure-report/
+allure-report-ui/
+screenshots/
+htmlcov/
+report.html
+.benchmarks/

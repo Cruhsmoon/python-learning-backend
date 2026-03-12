@@ -26,6 +26,9 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+    env:
+      ALLURE_RESULTS_DIR: allure-results
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -40,16 +43,56 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: Run tests with coverage
+      - name: Run tests with coverage and Allure
         run: |
-          pytest --cov=src --cov-branch --cov-fail-under=80 \
+          pytest \
             --ignore=tests/postman \
             --ignore=tests/ui \
-            --ignore=tests/api/test_openapi.py
+            --ignore=tests/api/test_openapi.py \
+            --cov=src \
+            --cov-config=.coveragerc \
+            --cov-branch \
+            --cov-fail-under=80 \
+            --alluredir=allure-results \
+            -q
+
+      - name: Install Allure CLI
+        if: always()
+        run: |
+          curl -sLo allure.tgz \
+            https://github.com/allure-framework/allure2/releases/download/2.29.0/allure-2.29.0.tgz
+          tar -xzf allure.tgz
+          echo "$(pwd)/allure-2.29.0/bin" >> $GITHUB_PATH
+
+      - name: Generate Allure HTML report
+        if: always()
+        run: |
+          allure generate allure-results \
+            --clean \
+            -o allure-report
+
+      - name: Upload Allure report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report-${{ github.run_number }}
+          path: allure-report/
+          retention-days: 30
+
+      - name: Upload raw Allure results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results-${{ github.run_number }}
+          path: allure-results/
+          retention-days: 7
 
   # ── UI / Playwright end-to-end tests ────────────────────────────────────────
   ui-test:
     runs-on: ubuntu-latest
+
+    env:
+      ALLURE_RESULTS_DIR: allure-results-ui
 
     steps:
       - name: Checkout repository
@@ -72,4 +115,32 @@ jobs:
         env:
           BASE_URL_UI: https://www.greenbook.org
         run: |
-          pytest tests/ui -v --tb=short -m ui
+          pytest tests/ui \
+            -v \
+            --tb=short \
+            -m ui \
+            --alluredir=allure-results-ui
+        continue-on-error: true
+
+      - name: Install Allure CLI
+        if: always()
+        run: |
+          curl -sLo allure.tgz \
+            https://github.com/allure-framework/allure2/releases/download/2.29.0/allure-2.29.0.tgz
+          tar -xzf allure.tgz
+          echo "$(pwd)/allure-2.29.0/bin" >> $GITHUB_PATH
+
+      - name: Generate Allure HTML report
+        if: always()
+        run: |
+          allure generate allure-results-ui \
+            --clean \
+            -o allure-report-ui
+
+      - name: Upload UI Allure report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report-ui-${{ github.run_number }}
+          path: allure-report-ui/
+          retention-days: 30

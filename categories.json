@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Product defects",
+    "matchedStatuses": ["failed"],
+    "messageRegex": ".*AssertionError.*"
+  },
+  {
+    "name": "Authentication failures",
+    "matchedStatuses": ["failed"],
+    "messageRegex": ".*401.*|.*403.*|.*Unauthorized.*|.*Forbidden.*"
+  },
+  {
+    "name": "Infrastructure failures",
+    "matchedStatuses": ["broken"],
+    "messageRegex": ".*ConnectionError.*|.*OperationalError.*|.*TimeoutError.*"
+  },
+  {
+    "name": "Test automation issues",
+    "matchedStatuses": ["broken"],
+    "messageRegex": ".*fixture.*|.*ImportError.*|.*AttributeError.*"
+  }
+]

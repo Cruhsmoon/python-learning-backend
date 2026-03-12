@@ -1,0 +1,12 @@
+[run]
+source = src
+branch = True
+concurrency = multiprocessing,thread
+parallel = True
+sigterm = True
+
+[report]
+fail_under = 80
+
+[html]
+directory = htmlcov
